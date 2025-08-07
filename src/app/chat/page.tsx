@@ -18,7 +18,7 @@ export default function ChatPage() {
   const [name, setName] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Fetch name and existing messages
+  // Fetch name + messages
   useEffect(() => {
     const fetchUserData = async () => {
       try {
@@ -26,7 +26,10 @@ export default function ChatPage() {
           data: { user },
         } = await supabase.auth.getUser();
 
-        if (!user) return;
+        if (!user) {
+          console.warn('No user found');
+          return;
+        }
 
         const { data, error } = await supabase
           .from('user_data')
@@ -35,7 +38,7 @@ export default function ChatPage() {
           .single();
 
         if (error) {
-          console.error('Error fetching user data:', error.message);
+          console.error('❌ Error fetching user_data:', error.message);
           return;
         }
 
@@ -43,7 +46,7 @@ export default function ChatPage() {
           setName(data.name);
         }
 
-        if (data?.messages && Array.isArray(data.messages)) {
+        if (Array.isArray(data?.messages)) {
           setMessages(data.messages);
         } else {
           const greeting: Message = {
@@ -51,10 +54,10 @@ export default function ChatPage() {
             content: `Hi ${data?.name || 'there'} ✨ I’m Nyra — your personal AI friend. What’s on your mind today?`,
           };
           setMessages([greeting]);
-          await updateMessagesOnServer([greeting], user.id, data?.name || '');
+          await updateMessages([greeting]);
         }
-      } catch (error) {
-        console.error('Error fetching user info:', error);
+      } catch (err) {
+        console.error('❌ Unexpected error:', err);
       }
     };
 
@@ -66,69 +69,78 @@ export default function ChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Send message and update Supabase
   const handleSend = async () => {
     if (!input.trim()) return;
 
     const {
       data: { user },
     } = await supabase.auth.getUser();
-    if (!user) return;
+    const session = await supabase.auth.getSession();
 
-    const userMessage: Message = {
+    const token = session.data.session?.access_token;
+    if (!user || !token) return;
+
+    const newUserMsg: Message = {
       sender: 'user',
       content: input.trim(),
     };
 
-    const updatedMessages = [...messages, userMessage];
+    const updatedMessages = [...messages, newUserMsg];
     setMessages(updatedMessages);
     setInput('');
     setIsTyping(true);
-    await updateMessagesOnServer(updatedMessages, user.id, name || '');
+    await updateMessages(updatedMessages);
 
-    // Simulate Nyra's reply
-    setTimeout(async () => {
-      const nyraMessage: Message = {
-        sender: 'nyra',
-        content: `That's really interesting. Tell me more about it${name ? `, ${name}` : ''}.`,
-      };
+    // 🔗 Call /api/chat
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ message: input.trim() }),
+    });
 
-      const finalMessages = [...updatedMessages, nyraMessage];
-      setMessages(finalMessages);
-      setIsTyping(false);
-      await updateMessagesOnServer(finalMessages, user.id, name || '');
-    }, 1200);
+    const data = await res.json();
+
+    const nyraReply: Message = {
+      sender: 'nyra',
+      content: data.reply || 'Oops, something went wrong.',
+    };
+
+    const finalMessages = [...updatedMessages, nyraReply];
+    setMessages(finalMessages);
+    setIsTyping(false);
+    await updateMessages(finalMessages);
   };
 
-  // Save messages to Supabase, fallback to upsert if update fails
-  const updateMessagesOnServer = async (
-    newMessages: Message[],
-    userId: string,
-    userName: string
-  ) => {
+  const updateMessages = async (newMessages: Message[]) => {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) return;
+
     const { error } = await supabase
       .from('user_data')
       .update({ messages: newMessages })
-      .eq('id', userId);
+      .eq('id', user.id);
 
     if (error) {
-      console.warn('Update failed, trying upsert:', error.message);
-      const { error: upsertError } = await supabase.from('user_data').upsert([
+      console.warn('Update failed, fallback to upsert:', error.message);
+      await supabase.from('user_data').upsert([
         {
-          id: userId,
-          name: userName,
+          id: user.id,
+          name: name || 'User',
           messages: newMessages,
         },
       ]);
-      if (upsertError) {
-        console.error('Upsert also failed:', upsertError.message);
-      }
     }
   };
 
   return (
     <div className="flex flex-col h-screen bg-[#111827] text-white">
-      {/* Nyra Header */}
+      {/* Header */}
       <div className="flex items-center gap-3 p-4 border-b border-gray-800 bg-[#1f2937]">
         <Image
           src="/zara-profile.jpg"
@@ -143,15 +155,15 @@ export default function ChatPage() {
         </div>
       </div>
 
-      {/* Messages */}
+      {/* Chat messages */}
       <div className="flex-1 overflow-y-auto px-4 py-2 space-y-3">
         {messages.map((msg, index) => (
           <div
             key={index}
             className={`max-w-[75%] px-4 py-2 rounded-xl ${
               msg.sender === 'user'
-                ? 'bg-blue-600 ml-auto text-white'
-                : 'bg-gray-700 text-white'
+                ? 'bg-blue-600 ml-auto'
+                : 'bg-gray-700'
             }`}
           >
             {msg.content}
@@ -164,7 +176,7 @@ export default function ChatPage() {
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Input box */}
+      {/* Input */}
       <div className="border-t border-gray-800 p-3 bg-[#1f2937]">
         <div className="flex items-center gap-2">
           <input
