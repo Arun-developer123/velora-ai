@@ -26,10 +26,7 @@ export default function ChatPage() {
           data: { user },
         } = await supabase.auth.getUser();
 
-        if (!user) {
-          console.warn('No user found');
-          return;
-        }
+        if (!user) return;
 
         const { data, error } = await supabase
           .from('user_data')
@@ -91,34 +88,75 @@ export default function ChatPage() {
     setIsTyping(true);
     await updateMessages(updatedMessages);
 
-    // 🔗 Call /api/chat
-    const res = await fetch('/api/chat', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({ message: input.trim() }),
-    });
+    // 🔗 Streaming fetch from /api/chat
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ message: input.trim() }),
+      });
 
-    const data = await res.json();
+      if (!res.body) throw new Error('No response body');
 
-    const nyraReply: Message = {
-      sender: 'nyra',
-      content: data.reply || 'Oops, something went wrong.',
-    };
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder('utf-8');
 
-    const finalMessages = [...updatedMessages, nyraReply];
-    setMessages(finalMessages);
-    setIsTyping(false);
-    await updateMessages(finalMessages);
+      let fullReply = '';
+      let currentNyraMsg: Message = { sender: 'nyra', content: '' };
+      const streamedMessages = [...updatedMessages, currentNyraMsg];
+      setMessages([...streamedMessages]);
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value, { stream: true });
+
+        const lines = chunk.split('\n').filter(line => line.startsWith('data: '));
+        for (const line of lines) {
+          const json = line.replace(/^data: /, '');
+
+          if (json === '[DONE]') continue;
+
+          try {
+            const parsed = JSON.parse(json);
+            const content = parsed.choices?.[0]?.delta?.content || '';
+
+            if (content) {
+              fullReply += content;
+              currentNyraMsg.content = fullReply;
+
+              streamedMessages[streamedMessages.length - 1] = { ...currentNyraMsg };
+              setMessages([...streamedMessages]);
+            }
+          } catch (err) {
+            console.warn('Chunk parse error:', err);
+          }
+        }
+      }
+
+      setIsTyping(false);
+      await updateMessages(streamedMessages);
+    } catch (err) {
+      console.error('❌ Streaming error:', err);
+      const fallback: Message = {
+        sender: 'nyra',
+        content: 'Oops, something went wrong.',
+      };
+      const failedMessages = [...updatedMessages, fallback];
+      setMessages(failedMessages);
+      setIsTyping(false);
+      await updateMessages(failedMessages);
+    }
   };
 
   const updateMessages = async (newMessages: Message[]) => {
     const {
       data: { user },
     } = await supabase.auth.getUser();
-
     if (!user) return;
 
     const { error } = await supabase
@@ -169,7 +207,6 @@ export default function ChatPage() {
             {msg.content}
           </div>
         ))}
-
         {isTyping && (
           <div className="text-sm text-gray-400 animate-pulse">Nyra is typing...</div>
         )}

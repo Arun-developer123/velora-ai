@@ -15,21 +15,28 @@ export default function SignInPage() {
   const handleSignIn = async () => {
     setError('')
 
-    const { data, error: signInError } = await supabase.auth.signInWithPassword({
-      email,
-      password
-    })
+    const { error: signInError } = await supabase.auth.signInWithPassword({
+  email,
+  password,
+})
 
-    if (signInError) {
-      setError(signInError.message)
-      return
-    }
+if (signInError) {
+  setError(signInError.message)
+  return
+}
 
-    const userId = data?.user?.id
-    if (!userId) {
-      setError('User ID not found after sign in.')
-      return
-    }
+// Wait for session to be fully available
+const {
+  data: { session },
+  error: sessionError,
+} = await supabase.auth.getSession()
+
+if (sessionError || !session?.user?.id) {
+  setError('Signed in but session not ready.')
+  return
+}
+
+const userId = session.user.id
 
     // Save user's name in user_data table (upsert ensures insert or update)
     const { error: dbError } = await supabase
