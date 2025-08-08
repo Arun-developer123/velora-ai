@@ -18,6 +18,22 @@ export default function ChatPage() {
   const [name, setName] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  // Mark Nyra messages as seen
+  useEffect(() => {
+    const markSeen = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      await supabase
+        .from('nyra_messages')
+        .update({ seen: true })
+        .eq('user_id', user.id)
+        .eq('seen', false);
+    };
+
+    markSeen();
+  }, []);
+
   // Fetch name + messages
   useEffect(() => {
     const fetchUserData = async () => {

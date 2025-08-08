@@ -8,47 +8,48 @@ import supabase from '@/lib/supabase'
 export default function HomePage() {
   const [name, setName] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const [unseenCount, setUnseenCount] = useState(0)
 
   useEffect(() => {
-    const fetchName = async () => {
-      try {
-        const {
-          data: { user },
-          error: userError,
-        } = await supabase.auth.getUser()
+    const fetchUserData = async () => {
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser()
 
-        if (userError) {
-          console.error('Error fetching user:', userError.message)
-          setName(null)
-          setLoading(false)
-          return
-        }
-
-        if (user) {
-          const { data, error } = await supabase
-            .from('user_data')
-            .select('name')
-            .eq('id', user.id)
-            .single()
-
-          if (error) {
-            console.error('Error fetching name:', error.message)
-            setName(null)
-          } else {
-            setName(data?.name || null)
-          }
-        } else {
-          setName(null)
-        }
-      } catch (err) {
-        console.error('Unexpected error:', err)
+      if (userError || !user) {
+        console.error('Error fetching user:', userError?.message)
         setName(null)
-      } finally {
         setLoading(false)
+        return
+      }
+
+      const { data, error } = await supabase
+        .from('user_data')
+        .select('name')
+        .eq('id', user.id)
+        .single()
+
+      if (error) {
+        console.error('Error fetching name:', error.message)
+        setName(null)
+      } else {
+        setName(data?.name || null)
+      }
+
+      // Load unseen Nyra messages count
+      const { count, error: countError } = await supabase
+        .from('nyra_messages')
+        .select('*', { count: 'exact', head: true })
+        .eq('user_id', user.id)
+        .eq('seen', false)
+
+      if (!countError && typeof count === 'number') {
+        setUnseenCount(count)
       }
     }
 
-    fetchName()
+    fetchUserData()
   }, [])
 
   return (
@@ -81,21 +82,29 @@ export default function HomePage() {
 
         {/* Action Buttons */}
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-2">
-          <Link href="/chat">
-            <button className="w-full px-6 py-4 bg-indigo-600 hover:bg-opacity-100 text-white text-lg rounded-2xl shadow-lg transition duration-300">
+          <Link href="/chat" className="relative">
+            <button className="w-full px-6 py-4 bg-indigo-600 hover:bg-opacity-100 text-white text-lg rounded-2xl shadow-lg transition duration-300 relative">
               🚀 Start Chatting
+              {unseenCount > 0 && (
+                <span className="absolute top-0 right-2 -mt-1 -mr-2 bg-red-600 text-xs font-bold rounded-full px-2 py-0.5 shadow-lg">
+                  {unseenCount}
+                </span>
+              )}
             </button>
           </Link>
+
           <Link href="/fuel">
             <button className="w-full px-6 py-4 bg-purple-700 hover:bg-opacity-100 text-white text-lg rounded-2xl shadow-lg transition duration-300">
               ⚡ Check Nyra’s Energy
             </button>
           </Link>
+
           <Link href="/daily-checkin">
             <button className="w-full px-6 py-4 bg-emerald-600 hover:bg-opacity-100 text-white text-lg rounded-2xl shadow-lg transition duration-300">
               ☀️ Daily Check-In
             </button>
           </Link>
+
           <Link href="/achievements">
             <button className="w-full px-6 py-4 bg-pink-600 hover:bg-opacity-100 text-white text-lg rounded-2xl shadow-lg transition duration-300">
               🏆 Achievements
