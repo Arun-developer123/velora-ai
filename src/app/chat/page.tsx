@@ -1,11 +1,9 @@
-'use client';
+"use client";
 
-import { useEffect, useRef, useState } from 'react';
-import Image from 'next/image';
-import supabase from '@/lib/supabase';
+import { useState, useEffect, useRef } from "react";
+import supabase from "@/lib/supabase";
 
-type Sender = 'user' | 'nyra';
-
+type Sender = "user" | "nyra";
 interface Message {
   sender: Sender;
   content: string;
@@ -13,241 +11,267 @@ interface Message {
 
 export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([]);
-  const [input, setInput] = useState('');
+  const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
-  const [name, setName] = useState<string | null>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [isFirstMessage, setIsFirstMessage] = useState(true);
+  const [isNight, setIsNight] = useState(false);
+  const [nyraMood, setNyraMood] = useState<"happy" | "thinking" | "listening">("happy");
+  const [userId, setUserId] = useState<string | null>(null);
 
-  // Mark Nyra messages as seen
-  useEffect(() => {
-    const markSeen = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-
-      await supabase
-        .from('nyra_messages')
-        .update({ seen: true })
-        .eq('user_id', user.id)
-        .eq('seen', false);
-    };
-
-    markSeen();
-  }, []);
-
-  // Fetch name + messages
-  useEffect(() => {
-    const fetchUserData = async () => {
-      try {
-        const {
-          data: { user },
-        } = await supabase.auth.getUser();
-
-        if (!user) return;
-
-        const { data, error } = await supabase
-          .from('user_data')
-          .select('name, messages')
-          .eq('id', user.id)
-          .single();
-
-        if (error) {
-          console.error('❌ Error fetching user_data:', error.message);
-          return;
-        }
-
-        if (data?.name) {
-          setName(data.name);
-        }
-
-        if (Array.isArray(data?.messages)) {
-          setMessages(data.messages);
-        } else {
-          const greeting: Message = {
-            sender: 'nyra',
-            content: `Hi ${data?.name || 'there'} ✨ I’m Nyra — your personal AI friend. What’s on your mind today?`,
-          };
-          setMessages([greeting]);
-          await updateMessages([greeting]);
-        }
-      } catch (err) {
-        console.error('❌ Unexpected error:', err);
-      }
-    };
-
-    fetchUserData();
-  }, []);
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
   // Auto scroll
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, isTyping]);
 
-  const handleSend = async () => {
-    if (!input.trim()) return;
+  // Night mode check
+  useEffect(() => {
+    const hour = new Date().getHours();
+    setIsNight(hour >= 19 || hour < 6);
+  }, []);
 
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    const session = await supabase.auth.getSession();
-
-    const token = session.data.session?.access_token;
-    if (!user || !token) return;
-
-    const newUserMsg: Message = {
-      sender: 'user',
-      content: input.trim(),
-    };
-
-    const updatedMessages = [...messages, newUserMsg];
-    setMessages(updatedMessages);
-    setInput('');
-    setIsTyping(true);
-    await updateMessages(updatedMessages);
-
-    // 🔗 Streaming fetch from /api/chat
-    try {
-      const res = await fetch('/api/chat', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ message: input.trim() }),
-      });
-
-      if (!res.body) throw new Error('No response body');
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder('utf-8');
-
-      let fullReply = '';
-      let currentNyraMsg: Message = { sender: 'nyra', content: '' };
-      const streamedMessages = [...updatedMessages, currentNyraMsg];
-      setMessages([...streamedMessages]);
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        const chunk = decoder.decode(value, { stream: true });
-
-        const lines = chunk.split('\n').filter(line => line.startsWith('data: '));
-        for (const line of lines) {
-          const json = line.replace(/^data: /, '');
-
-          if (json === '[DONE]') continue;
-
-          try {
-            const parsed = JSON.parse(json);
-            const content = parsed.choices?.[0]?.delta?.content || '';
-
-            if (content) {
-              fullReply += content;
-              currentNyraMsg.content = fullReply;
-
-              streamedMessages[streamedMessages.length - 1] = { ...currentNyraMsg };
-              setMessages([...streamedMessages]);
-            }
-          } catch (err) {
-            console.warn('Chunk parse error:', err);
-          }
-        }
+  // Fetch current user and load previous messages
+  useEffect(() => {
+    const fetchUserAndMessages = async () => {
+      const { data: authData, error: authError } = await supabase.auth.getUser();
+      if (authError || !authData.user) {
+        console.error("User fetch error:", authError);
+        return;
       }
 
+      const uid = authData.user.id;
+      setUserId(uid);
+
+      const { data, error } = await supabase
+        .from("user_data")
+        .select("messages")
+        .eq("id", uid)
+        .single();
+
+      if (error) {
+        console.error("Fetch messages error:", error);
+        return;
+      }
+
+      if (data?.messages) {
+        setMessages(data.messages);
+        setIsFirstMessage(data.messages.length === 0);
+      }
+    };
+
+    fetchUserAndMessages();
+  }, []);
+
+  const sendMessage = async () => {
+    if (!input.trim() || !userId) return;
+
+    const userMessage: Message = { sender: "user", content: input.trim() };
+    const updatedMessages = [...messages, userMessage];
+
+    setMessages(updatedMessages);
+    setInput("");
+    setIsTyping(true);
+    setNyraMood("thinking");
+
+    // Save user message to Supabase
+    await supabase
+      .from("user_data")
+      .update({ messages: updatedMessages })
+      .eq("id", userId);
+
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: userMessage.content,
+          conversationContext: updatedMessages,
+          isFirstMessage,
+        }),
+      });
+
+      const data = await res.json();
+      const nyraMessage: Message = { sender: "nyra", content: data.reply };
+      const finalMessages = [...updatedMessages, nyraMessage];
+
+      setMessages(finalMessages);
       setIsTyping(false);
-      await updateMessages(streamedMessages);
-    } catch (err) {
-      console.error('❌ Streaming error:', err);
-      const fallback: Message = {
-        sender: 'nyra',
-        content: 'Oops, something went wrong.',
-      };
-      const failedMessages = [...updatedMessages, fallback];
-      setMessages(failedMessages);
+      setIsFirstMessage(false);
+      setNyraMood("happy");
+
+      // Save Nyra reply to Supabase
+      await supabase
+        .from("user_data")
+        .update({ messages: finalMessages })
+        .eq("id", userId);
+    } catch (error) {
+      console.error("Send message error:", error);
       setIsTyping(false);
-      await updateMessages(failedMessages);
     }
   };
 
-  const updateMessages = async (newMessages: Message[]) => {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) return;
-
-    const { error } = await supabase
-      .from('user_data')
-      .update({ messages: newMessages })
-      .eq('id', user.id);
-
-    if (error) {
-      console.warn('Update failed, fallback to upsert:', error.message);
-      await supabase.from('user_data').upsert([
-        {
-          id: user.id,
-          name: name || 'User',
-          messages: newMessages,
-        },
-      ]);
-    }
-  };
+  const moodBgClass =
+    nyraMood === "happy"
+      ? "bg-happy"
+      : nyraMood === "thinking"
+      ? "bg-thinking"
+      : "bg-listening";
 
   return (
-    <div className="flex flex-col h-screen bg-[#111827] text-white">
-      {/* Header */}
-      <div className="flex items-center gap-3 p-4 border-b border-gray-800 bg-[#1f2937]">
-        <Image
-          src="/zara-profile.jpg"
-          alt="Nyra"
-          width={40}
-          height={40}
-          className="rounded-full"
-        />
-        <div>
-          <h1 className="text-lg font-semibold">Nyra</h1>
-          <p className="text-xs text-green-400">online</p>
-        </div>
-      </div>
+    <div className={`flex flex-col h-screen relative overflow-hidden`}>
+      {/* Moving AI Background */}
+      <div className={`absolute inset-0 ${moodBgClass} animate-backgroundMove transition-all duration-1000`}></div>
+      {isNight && <div className="absolute inset-0 bg-black/40 z-0"></div>}
 
-      {/* Chat messages */}
-      <div className="flex-1 overflow-y-auto px-4 py-2 space-y-3">
-        {messages.map((msg, index) => (
-          <div
-            key={index}
-            className={`max-w-[75%] px-4 py-2 rounded-xl ${
-              msg.sender === 'user'
-                ? 'bg-blue-600 ml-auto'
-                : 'bg-gray-700'
-            }`}
-          >
-            {msg.content}
+      <div className="relative z-10 flex flex-col h-full">
+        {/* Header */}
+        <div className="flex items-center p-4 shadow-md backdrop-blur-md bg-white/30 dark:bg-white/10 border-b border-white/30 sticky top-0 z-50">
+          <div className="relative w-12 h-12">
+            <div
+              className={`absolute inset-0 rounded-full blur-lg opacity-80 ${
+                nyraMood === "happy"
+                  ? "animate-glowHappy"
+                  : nyraMood === "thinking"
+                  ? "animate-glowThinking"
+                  : "animate-glowListening"
+              }`}
+            ></div>
+            <img
+              src="/zara-profile.jpg"
+              alt="Nyra"
+              className="w-12 h-12 rounded-full border-2 border-pink-400 shadow-md relative z-10"
+            />
           </div>
-        ))}
-        {isTyping && (
-          <div className="text-sm text-gray-400 animate-pulse">Nyra is typing...</div>
-        )}
-        <div ref={messagesEndRef} />
-      </div>
+          <div className="ml-3">
+            <div className="font-semibold text-gray-900 dark:text-white text-lg">Nyra</div>
+            <div className="flex items-center space-x-1">
+              <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></span>
+              <span className="text-green-600 dark:text-green-300 text-sm">Online</span>
+            </div>
+          </div>
+        </div>
 
-      {/* Input */}
-      <div className="border-t border-gray-800 p-3 bg-[#1f2937]">
-        <div className="flex items-center gap-2">
+        {/* Messages */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+          {messages.map((msg, idx) => (
+            <div
+              key={idx}
+              className={`flex ${msg.sender === "user" ? "justify-end" : "justify-start"} animate-slideUp`}
+            >
+              <div
+                className={`max-w-xs md:max-w-md px-4 py-2 rounded-2xl shadow-lg transition-all ${
+                  msg.sender === "user"
+                    ? "bg-gradient-to-r from-blue-500 to-purple-500 text-white rounded-br-none"
+                    : "bg-white/60 backdrop-blur-md dark:bg-white/20 text-gray-800 dark:text-white rounded-bl-none border border-white/30"
+                }`}
+              >
+                {msg.content}
+              </div>
+            </div>
+          ))}
+
+          {isTyping && (
+            <div className="flex justify-start animate-slideUp">
+              <div className="bg-white/60 backdrop-blur-md dark:bg-white/20 text-gray-800 dark:text-white px-4 py-2 rounded-2xl rounded-bl-none shadow-lg flex space-x-1 border border-white/30">
+                <span className="typing-dot bg-gray-500"></span>
+                <span className="typing-dot bg-gray-500"></span>
+                <span className="typing-dot bg-gray-500"></span>
+              </div>
+            </div>
+          )}
+          <div ref={messagesEndRef} />
+        </div>
+
+        {/* Input */}
+        <div className="p-3 bg-white/80 dark:bg-white/20 backdrop-blur-lg shadow-lg flex items-center space-x-2 sticky bottom-0 border-t border-white/30">
           <input
-            type="text"
+            className="flex-1 border border-gray-300 dark:border-gray-600 rounded-full px-4 py-2 focus:outline-none focus:ring-2 focus:ring-pink-400 bg-white/70 dark:bg-white/10 backdrop-blur-md text-gray-900 dark:text-white"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-            className="flex-1 px-4 py-2 rounded-full bg-gray-800 text-white focus:outline-none"
-            placeholder="Talk to Nyra..."
+            onKeyDown={(e) => e.key === "Enter" && sendMessage()}
+            placeholder="Type a message..."
           />
           <button
-            onClick={handleSend}
-            className="px-4 py-2 bg-blue-600 rounded-full hover:bg-blue-700 transition"
+            className="bg-gradient-to-r from-pink-500 to-purple-500 text-white px-5 py-2 rounded-full font-medium shadow hover:opacity-90 transition"
+            onClick={sendMessage}
           >
             Send
           </button>
         </div>
       </div>
+
+      {/* Styles */}
+      <style jsx>{`
+        @keyframes slideUp {
+          from {
+            opacity: 0;
+            transform: translateY(6px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+        .animate-slideUp {
+          animation: slideUp 0.3s ease-out;
+        }
+        .typing-dot {
+          width: 6px;
+          height: 6px;
+          border-radius: 50%;
+          animation: blink 1.4s infinite both;
+        }
+        .typing-dot:nth-child(2) {
+          animation-delay: 0.2s;
+        }
+        .typing-dot:nth-child(3) {
+          animation-delay: 0.4s;
+        }
+        @keyframes blink {
+          0%,
+          80%,
+          100% {
+            opacity: 0.3;
+          }
+          40% {
+            opacity: 1;
+          }
+        }
+        @keyframes glowHappy {
+          0%, 100% { background: radial-gradient(circle, rgba(255,182,193,0.7), transparent); }
+          50% { background: radial-gradient(circle, rgba(255,105,180,0.9), transparent); }
+        }
+        @keyframes glowThinking {
+          0%, 100% { background: radial-gradient(circle, rgba(135,206,250,0.7), transparent); }
+          50% { background: radial-gradient(circle, rgba(30,144,255,0.9), transparent); }
+        }
+        @keyframes glowListening {
+          0%, 100% { background: radial-gradient(circle, rgba(144,238,144,0.7), transparent); }
+          50% { background: radial-gradient(circle, rgba(34,139,34,0.9), transparent); }
+        }
+        .animate-glowHappy { animation: glowHappy 2s infinite alternate; }
+        .animate-glowThinking { animation: glowThinking 2s infinite alternate; }
+        .animate-glowListening { animation: glowListening 2s infinite alternate; }
+        @keyframes backgroundMove {
+          0% { background-position: 0% 50%; }
+          50% { background-position: 100% 50%; }
+          100% { background-position: 0% 50%; }
+        }
+        .animate-backgroundMove {
+          background-size: 400% 400%;
+          animation: backgroundMove 15s ease infinite;
+        }
+        .bg-happy {
+          background: linear-gradient(-45deg, #ff9a9e, #fad0c4, #fbc2eb, #a18cd1);
+        }
+        .bg-thinking {
+          background: linear-gradient(-45deg, #89f7fe, #66a6ff, #a18cd1, #6dd5ed);
+        }
+        .bg-listening {
+          background: linear-gradient(-45deg, #a8ff78, #78ffd6, #43e97b, #38f9d7);
+        }
+      `}</style>
     </div>
   );
 }

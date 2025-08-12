@@ -12,40 +12,49 @@ export default function HomePage() {
 
   useEffect(() => {
     const fetchUserData = async () => {
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser()
+      try {
+        // Get current user
+        const {
+          data: { user },
+          error: userError,
+        } = await supabase.auth.getUser()
 
-      if (userError || !user) {
-        console.error('Error fetching user:', userError?.message)
-        setName(null)
-        setLoading(false)
-        return
-      }
+        if (userError || !user) {
+          console.error('Error fetching user:', userError?.message)
+          setName(null)
+          setLoading(false)
+          return
+        }
 
-      const { data, error } = await supabase
-        .from('user_data')
-        .select('name')
-        .eq('id', user.id)
-        .single()
+        // Fetch user name
+        const { data, error } = await supabase
+          .from('user_data')
+          .select('name')
+          .eq('id', user.id)
+          .single()
 
-      if (error) {
-        console.error('Error fetching name:', error.message)
-        setName(null)
-      } else {
-        setName(data?.name || null)
-      }
+        if (error) {
+          console.error('Error fetching name:', error.message)
+          setName(null)
+        } else {
+          setName(data?.name || null)
+        }
 
-      // Load unseen Nyra messages count
-      const { count, error: countError } = await supabase
-        .from('nyra_messages')
-        .select('*', { count: 'exact', head: true })
-        .eq('user_id', user.id)
-        .eq('seen', false)
+        // Fetch unseen Nyra messages count
+        const { count, error: countError } = await supabase
+          .from('nyra_messages')
+          .select('*', { count: 'exact', head: true })
+          .eq('user_id', user.id)
+          .eq('seen', false)
 
-      if (!countError && typeof count === 'number') {
-        setUnseenCount(count)
+        if (!countError && typeof count === 'number') {
+          setUnseenCount(count)
+        }
+
+      } catch (err) {
+        console.error('Unexpected error:', err)
+      } finally {
+        setLoading(false) // ✅ Always stop loading after fetch
       }
     }
 

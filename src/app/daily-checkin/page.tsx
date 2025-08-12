@@ -9,7 +9,7 @@ import relativeTime from 'dayjs/plugin/relativeTime'
 
 dayjs.extend(relativeTime)
 
-const analyzeMessagesAndGetQuestion = (messages: string[]): string => {
+const analyzeMessagesAndGetQuestion = (messages: any[]): string => {
   const keywords: Record<string, string> = {
     overwhelmed: 'stress',
     meditation: 'routine',
@@ -38,10 +38,16 @@ const analyzeMessagesAndGetQuestion = (messages: string[]): string => {
 
   const matchedTopics = new Set<string>()
 
-  messages.forEach(msg => {
-    const lower = msg.toLowerCase()
+  // Normalize messages content - handle array of strings or objects with content/message fields
+  const normalizedMessages = (messages || []).map(m =>
+    typeof m === 'string'
+      ? m.toLowerCase()
+      : (m?.content ?? m?.message ?? '').toLowerCase()
+  )
+
+  normalizedMessages.forEach(msg => {
     for (const keyword in keywords) {
-      if (lower.includes(keyword)) {
+      if (msg.includes(keyword)) {
         matchedTopics.add(keywords[keyword])
       }
     }
@@ -82,26 +88,31 @@ export default function DailyCheckInPage() {
 
       if (dataError) {
         console.error('Error fetching user data:', dataError.message)
-      } else {
-        setName(data?.name || 'there')
-        setLastCheckInTime(data?.last_checkin || null)
-
-        const hoursSince = data?.last_checkin
-          ? dayjs().diff(dayjs(data.last_checkin), 'hour')
-          : 25
-
-        if (hoursSince < 24) {
-          setIsCheckedIn(true)
-        }
-
-        const userMessages = data?.messages || []
-        setQuestion(analyzeMessagesAndGetQuestion(userMessages))
+        return
       }
+
+      setName(data?.name || 'there')
+      setLastCheckInTime(data?.last_checkin || null)
+
+      // Check if user already checked in within last 24 hours
+      const hoursSince = data?.last_checkin
+        ? dayjs().diff(dayjs(data.last_checkin), 'hour')
+        : 25
+
+      if (hoursSince < 24) {
+        setIsCheckedIn(true)
+      }
+
+      // Analyze previous messages to get personalized question
+      const userMessages = data?.messages || []
+      const q = analyzeMessagesAndGetQuestion(userMessages)
+      setQuestion(q)
     }
 
     fetchUserData()
   }, [])
 
+  // Redirect after successful check-in with a small delay
   useEffect(() => {
     if (isCheckedIn && response !== '') {
       const timer = setTimeout(() => {
@@ -109,9 +120,11 @@ export default function DailyCheckInPage() {
       }, 2000)
       return () => clearTimeout(timer)
     }
-  }, [isCheckedIn, router])
+  }, [isCheckedIn, response, router])
 
   const handleCheckIn = async () => {
+    if (!response.trim()) return
+
     const {
       data: { user },
       error,
@@ -122,11 +135,32 @@ export default function DailyCheckInPage() {
       return
     }
 
+    // Fetch existing messages
+    const { data: userData, error: fetchError } = await supabase
+      .from('user_data')
+      .select('messages')
+      .eq('id', user.id)
+      .single()
+
+    if (fetchError) {
+      console.error('Error fetching messages:', fetchError.message)
+      return
+    }
+
+    const existingMessages = Array.isArray(userData?.messages)
+      ? userData.messages
+      : []
+
+    // Append check-in response as a string or object? (keeping string for simplicity)
+    const updatedMessages = [...existingMessages, response.trim()]
+
+    // Update user_data row with new check-in, last_checkin timestamp and updated messages
     const { error: updateError } = await supabase
       .from('user_data')
       .update({
-        checkin: response,
+        checkin: response.trim(),
         last_checkin: new Date().toISOString(),
+        messages: updatedMessages,
       })
       .eq('id', user.id)
 
